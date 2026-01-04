@@ -1,0 +1,375 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Original Experiment
+
+## Question
+
+Markov was addressing a precise mathematical curiosity.
+
+> Do the laws of probability, such as the Law of Large Numbers, require 
+> **independent events**, or can they hold even when events are dependent?
+
+He wanted to demonstrate a counterexample: a dependent sequence where statistical
+regularities still emerge.
+
+* Independence: $P(X_{t+1} | X_t, X_{t-1},...) = P(X_{t+1})$
+* Markov property (dependence only on the present): $P(X_{t+1} | X_t, X_{t-1},...) = P(X_{t+1} | X_t)$
+
+The key insight: first-order dependence is enough to preserve stable frequencies over
+the long run.
+
+## Model
+
+Markov chose letters in text to demonstrate the counterexample because: 
+
+* They are finite and discrete,
+* Long sequences are available, and 
+* Dependencies exist (letters influence the next letter), but the system is simple.
+
+He made deliberate simplifications:
+
+* Ignore punctuation, which is not essential to the probability claim,
+* Ignore spaces to treat text as a continuous stream,
+* Ignore case and treat all letters in terms of state, and
+* Focus on single-letter transitions, i.e. first-order chain.
+
+The object of the study became state space: {a, b, c, ..., z} with transitions 
+(each letter to next letter) with a long sequence of letters.
+
+## Data Collection
+
+Markov literally counted transitions, which was a manual effort in his time, where 
+every letter is a current state, every next letter is a next state, and overlapping
+pairs are counted.
+
+| From | To  | Count |
+| ---- | --- | ----- |
+| a    | a   | ...   |
+| a    | b   | ...   |
+| ...  | ... | ...   |
+
+From these counts, he built a transition matrix $P$:
+$$
+P_{ij} = \frac{\text{Number of transitions from letter i to letter j}}{\text{Number of times letter i occurs as 'from'}}
+$$
+
+## Observations
+
+Even though the letters were dependent, the process was not independent.  The empirical
+frequencies of letters converged and matched theoretical predictions from the transition
+matrix.  
+
+This demonstrated that statistical regularity can arise under dependence.
+
+# My Experiment: Letter Transitions in Joyce
+
+## Load Libraries
+
+```{r}
+library("dplyr")
+library("ggplot2")
+library("igraph")
+library("reshape2")
+```
+
+## Source Text
+
+I use a passage from James Joyce, *The Sisters*, as the sequence of letters:
+
+> There was no hope for him this time: it was the third stroke. 
+> Night after night I had passed the house (it was vacation time) 
+> and studied the lighted square of window: and night after night 
+> I had found it lighted in the same way, faintly and evenly. If 
+> he was dead, I thought, I would see the reflection of candles 
+> on the darkened blind for I knew that two candles must be set 
+> at the head of a corpse. He had often said to me: I am not long 
+> for this world, and I had thought his words idle.
+
+## Read and Clean Text
+
+I remove punctuation and spaces to replicate Markov's original method.  All letters
+are converted to lowercase, and the cleaned text becomes a single, continuous string
+of letters.  For this excerpt, `n_chars` should be 378 letters.
+
+```{r}
+# Read the text from a file
+text_raw <- readLines("../inst/extdata/joyce_excerpt.txt", warn = FALSE)
+text_raw <- paste(text_raw, collapse = "")
+
+# Clean text: remove punctuation, spaces; convert to lowercase
+text_clean <- gsub("[^A-Za-z]", "", text_raw)
+text_clean <- tolower(text_clean)
+
+# Split into individual characters
+chars <- strsplit(text_clean, "")[[1]]
+
+# Confirm number of characters
+n_chars <- length(chars)
+n_chars
+```
+## Generate Overlapping Transitions
+
+```{r}
+# Overlapping pairs: current letter -> next letter
+from <- chars[-length(chars)]  # all letters except the last
+to   <- chars[-1]              # all letters except the first
+
+# Combine into a data frame
+transitions <- data.frame(from = from,
+                          to   = to,
+                          stringsAsFactors = FALSE)
+
+# Preview first 10 transitions
+head(transitions, 10)
+```
+
+`from = chars[-length(chars)]` excludes the last character, which cannot transition
+to anything.
+
+`to = chars[-1]` excludes the first character, aligning each element to the next state.
+
+Together, each row represents a single transition, exactly as Markov's method.
+
+## Build the Transition Matrix
+
+```{r}
+# Count occurrences for each letter pair
+tab <- table(transitions$from, transitions$to)
+
+# Optional: show a small subset of the table
+tab[letters[1:5], letters[1:5]]
+```
+
+`table()` counts all observed transition from `from` to `to`.  This is the empirical 
+basis for a first-order Markov chain.  Row normalization of this table produces
+transition probabilities, allowing computation of long-run letter frequencies.
+
+## Build the Transition Matrix
+
+Using the transitions data frame, count occurrences and normalize rows.
+
+```{r}
+# Count occurrences
+tab <- table(transitions$from, transitions$to)
+
+# Convert to numeric matrix
+P <- prop.table(tab, margin = 1)  # row-normalize to get probabilities
+
+# Preview first 5 rows and columns
+P[letters[1:5], letters[1:5]]
+```
+
+`prop.table(..., margin = 1)` normalizes each row so that all probabilities sum to one.
+Each row `i` corresponds to the current letter; each column `j` corresponds to the 
+probability of transitioning to `j`.  This is the first-order Markkov chain transition
+matrix.
+
+## Compute the Stationary Distribution
+
+The stationary distribution $\pi$ solves $\pi P = \pi$.  In R, we can compute it via
+eigenvectors or iteration.  Either method gives $\pi$, the long-run probabilities of 
+each letter.
+
+### Option A: Eigenvector Method
+
+```{r}
+eig <- eigen(t(P))  # transpose because eigen solves vP = v
+
+pi <- Re(eig$vectors[,1])
+
+pi <- pi / sum(pi)  # normalize
+
+names(pi) <- rownames(P)
+
+pi[1:10]  # preview first 10 letters
+```
+
+### Option B: Iterative Method (Convergence)
+
+```{r}
+# All letters.
+
+letters_all <- letters
+
+# Initialize empty matrix.
+
+P_full <- matrix(0, nrow = 26, ncol = 26,
+                 dimnames = list(letters_all, letters_all))
+
+# Fill in observed probabilities.
+
+observed_letters <- rownames(P)
+
+P_full[observed_letters, observed_letters] <- P
+
+# Check dimensions.
+
+dim(P_full)
+```
+
+## Iterative Stationary Distribution
+
+```{r}
+# Start with uniform distribution.
+
+pi_iter <- rep(1/26, 26)
+
+# Iteratively converge.
+
+for(i in 1:1000) {
+    pi_iter <- pi_iter %*% P_full
+}
+
+# Normalize
+
+pi_iter <- as.vector(pi_iter)
+
+names(pi_iter) <- letters_all
+
+# Preview.
+
+pi_iter[1:10]
+```
+
+## Compare Empirical Letter Frequencies
+
+```{r}
+# Count letters in cleaned text.
+
+empirical <- table(chars) / length(chars)
+
+# Make sure to include missing letters.
+
+empirical_full <- setNames(rep(0, 26), letters_all)
+
+empirical_full[names(empirical)] <- empirical 
+
+# Comparison
+
+compare <- data.frame(letter = letters_all,
+                      empirical = as.numeric(empirical_full),
+                      stationary = pi_iter)
+
+compare
+```
+
+## Visualize Transition Probabilities
+
+```{r}
+# Melt full transition matrix.
+
+P_long <- melt(P_full)
+
+colnames(P_long) <- c("from", "to", "prob")
+
+# Bar plot: transitions from letter 't'.
+
+ggplot(subset(P_long, from == "a"), aes(x = to, y = prob)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Transition probabilities from letter 'a'",
+       x = "Next letter",
+       y = "Probability") +
+  theme_minimal()
+```
+
+## Network Visual
+
+Convert the matrix to an edge list.
+
+```{r}
+# Convert matrix to long format.
+
+P_long <- melt(P_full)
+
+colnames(P_long) <- c("from", "to", "prob")
+
+# Remove zero-probability transitions.
+
+P_long <- subset(P_long, prob > 0)
+```
+
+Top n transitions per letter.
+
+```{r}
+edges <- P_long %>%
+  group_by(from) %>%
+  slice_max(prob, n = 2) %>%
+  ungroup()
+```
+
+Build and plot the Markov network.
+
+```{r}
+g <- graph_from_data_frame(
+  edges,
+  directed = TRUE,
+  vertices = data.frame(name = letters)
+)
+
+set.seed(123)
+
+layout <- layout_with_kk(g)
+
+plot(
+  g,
+  layout = layout,
+  vertex.size = 20,
+  vertex.label.cex = 0.9,
+  edge.width = edges$prob * 8,
+  edge.arrow.size = 0.4
+)
+
+```
+
+What this shows
+
+Nodes = letters
+
+Directed edges = transition probabilities
+
+Edge thickness = strength of transition
+
+Clusters = letters that frequently follow one another
+
+You’ll notice:
+
+Strong vowel–consonant patterns
+
+High self-transition letters (e.g., l → l, s → s)
+
+Structural asymmetries (q → u almost always)
+
+This is the Markov structure made visible.
+
+## Circular Layout
+
+```{r}
+library(ggraph)
+
+
+ggraph(g, layout = "circle") +
+  geom_edge_arc(
+    aes(width = prob),
+    alpha = 0.7,
+    strength = 0.7
+  ) +
+  geom_node_point(aes(size = pi)) +
+  geom_node_text(aes(label = name), vjust = 1.8) +
+  scale_edge_width(range = c(0.2, 3)) +
+  scale_size(range = c(4, 16)) +
+  theme_void()
+
+```
+
+
+
+
+
+
+
+
+
+
+
